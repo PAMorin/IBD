@@ -1,0 +1,513 @@
+---
+title: "IBD"
+author: "Phil Morin"
+date: "11/29/2018"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Isolation by distance (IBD) analysis of population genetic data, based on functions in the package 'adegenet' and associated tutorial. 
+This R-markdown document contains R-scripts to select genotypes based on a stratification scheme and conduct various analyses to infer genetic isolation by distance. 
+
+Example data and stratification files are included. For the purposes of the tutorial, repetitions for re-sampling tests have been set to 100, but should be increased as indicated in the comments for data analysis. 
+
+The markdown file can be knit to html, but not to Word or pdf. For pdf output, un-comment the pdf()/dev.off() lines in each section.
+
+https://github.com/thibautjombart/adegenet/blob/master/tutorials/tutorial-basics.pdf
+
+https://github.com/thibautjombart/adegenet
+
+
+load packages
+```{r echo=TRUE, results='hide', message=FALSE, warning=FALSE} 
+rm(list = ls())
+
+library(adegenet)
+library(strataG)
+library(spdep)
+library(tidyverse)
+library(gtools)
+library(PBSmapping)
+library(maps)
+library(ggplot2)
+library(rworldmap)
+library(swfscMisc)
+library(fields)
+library(RColorBrewer)
+library(mapplots)
+library(marmap)
+library(raster)
+
+paste("working directory is:")
+getwd()
+```
+
+
+load and format data from csv files for genotypes and stratification schemes (for gtypes object used by strataG package), and remove monomorphic loci for specified strata.
+```{r}
+    
+stratum <- "Wcoast4_outer" #corrected to reflect AK_STRATA_3 and Wcoast4_num (several samples removed compared to Num_AK3_WC4)
+title <- "IBD"
+#dir.create(paste(title,"_",stratum, sep = ""))
+
+# read genotypes data file (diploid, codominant); in directory above current directory
+# Format = 1st column = labid, 2 columns per locus
+gdata <- read.csv("example_100_loci_genotable.csv", header = TRUE) 
+#sample id column = 'labid', missing data as NA, 00, 000, -999
+
+# read stratification file (includes lat/lon coordinates)
+# in directory above current directory
+# required columns for labid, Latitude, Longitude. After that, each column is a stratification scheme with 
+#  strata names for each sample in the strata.
+coord <- read.csv("Strata_example_Ppho.csv", header = TRUE, na.strings=c("","NA"))
+# change labid column header name
+colnames(coord)[colnames(coord) == "LABID"] <- "labid"
+
+# combine data with coordinates (files can be different lengths)
+# select the specified stratum along with labid, Latitude and Longitude from the strata file
+strata.df.names <- c("labid", "Latitude", "Longitude", stratum)
+coord.strat <- coord[,colnames(coord) %in% strata.df.names]
+# then merge dataframes based on "labid" being a column name in both dataframes
+data <- merge(coord.strat,gdata)
+# remove sample data if not included in the specified strata
+data2 <- data %>% drop_na(stratum)
+# remove sample data if it doesn't have lat/lon
+data2 <- data2 %>% drop_na(Latitude)
+# Remove monomorphic loci then ane write a file of monomorphic loci for this stratification scheme.
+other<-data2 %>% dplyr::select(labid, Latitude, Longitude) #create dataframe to add Lat/Lon to gtypes object (labid, Latitude, Longitude)
+g <- df2gtypes(data2, #this creates a df with 2 columns for id and hap
+               ploidy = 2,
+               id.col = 1,
+               strata.col = 4,
+               loc.col = 5,
+               other = other,
+               description = title)
+alleleNum<-numAlleles(g)
+not.mono <- names(alleleNum)[alleleNum > 1]
+not.mono.g <- g[, not.mono, ]
+not.mono.df <- as.data.frame(not.mono.g)
+not.mono.df$labid<-not.mono.df$ids
+not.mono.df$ids<-NULL
+# Add the lat/lon data back to the dataframe
+data3<-merge(not.mono.df,other)
+# re-order the dataframe to put Lat/Lon columns after labid's
+latlon <- c("labid", "Latitude", "Longitude")
+data3 <- data3[, c(latlon, setdiff(names(data3), latlon))]
+#data3 <- data3 %>% arrange(strata, labid) # sort by strata column (ascending)
+
+# save list of monomorphic loci to a .csv file
+mono<-alleleNum < 2
+monoloc<-names(mono) [which(mono==TRUE)]
+write.csv(monoloc, paste0(stratum,"_monomorphic_loci.csv"))
+cat("there were", length(monoloc), "monomorphic loci, saved to file:", paste0(stratum,"_monomorphic_loci.csv"))
+
+#save summary of data (after excluding monomorphic loci)
+data_sum <- summary(not.mono.g)
+strata.df <- as.data.frame(data_sum$strata.smry)
+loc.df <- as.data.frame(data_sum$locus.smry)
+samp.df <- as.data.frame(data_sum$sample.smry)
+write.csv(strata.df, paste0(title,"_",stratum,"_data_sum.csv"))
+write.csv(loc.df, paste0(title,"_",stratum,"_loc_sum.csv"))
+write.csv(samp.df, paste0(title,"_",stratum,"_sample_sum.csv"))
+
+paste("number of individuals = ", data_sum$num.ind)
+paste("number of loci = ", data_sum$num.loc)
+
+# set the modified data file as the default database in R search path
+attach(data3) 
+
+data3[1:10,1:10]
+```
+
+#Map the data points
+```{r echo=FALSE, fig.height=8, fig.width=8}
+library(swfscMisc)
+pdf(file=paste0(title,"_",stratum,"_sample_map.pdf"))
+sample2.map<-function (lat, lon, lat.range, lon.range, main = NULL, 
+                       pch = 19, pt.cex = 1, col = "black", bg = col, 
+                       n = 5, lon.n = n, lat.n = n) 
+{
+  has.loc <- !is.na(lon) & !is.na(lat)
+  in.lon.range <- lon >= min(lon.range) & lon <= max(lon.range)
+  in.lat.range <- lat >= min(lat.range) & lat <= max(lat.range)
+  to.plot <- has.loc & in.lon.range & in.lat.range
+  if (!is.null(main)) 
+    main <- paste(main, " (n = ", sum(to.plot), ")", sep = "")
+  if (length(pch) == length(lon)) 
+    pch <- pch[to.plot]
+  if (length(pt.cex) == length(lon)) 
+    pt.cex <- pt.cex[to.plot]
+  if (length(col) == length(lon)) 
+    col <- col[to.plot]
+  op <- par(mar = c(3, 5, ifelse(is.null(main), 3, 5), 5) + 
+              0.1, oma = c(1, 1, 1, 1))
+  maps::map("world2Hires", xlim = lon.range, 
+      ylim = lat.range, boundary = TRUE, myborder = 0.1)
+  points(lon[to.plot], lat[to.plot], pch = pch, cex = pt.cex, 
+         col = col, bg = bg)
+  #lat.lon.axes(lon.range, lat.range, n = n, lon.n = lon.n, 
+  #             lat.n = lat.n)
+  if (!is.null(main)) 
+    mtext(main, line = 3, cex = 1.5)
+  box(lwd = 2)
+  #invisible(op)
+}
+
+#pop_number <- #list of numbers, 1 to the total number of populations in the strata
+  # build a color list for the number of populations in this stratification scheme
+
+# add a column for 360° mapping
+Lon360 <- ifelse(data3$Longitude < 0, 360 + data3$Longitude, data3$Longitude)
+data3_Lon360 <- cbind(data3, Lon360)
+lat_min <- min(data3_Lon360$Latitude)
+lat_max <- max(data3_Lon360$Latitude)
+lon_min <- min(data3_Lon360$Lon360)
+lon_max <- max(data3_Lon360$Lon360)
+    
+lat.range <- c(lat_min - 4, lat_max + 4)
+lon.range <- c(lon_min - 4, lon_max + 4)
+n<-5
+
+# NOT USED: could develop to select colors based on number of strata and apply to the map.
+#type.col <- "red" 
+#type.pch <- 21
+#create named vectors where the names match the values in the "type" column of 
+#the input data file, and each type is assigned a color and shape.
+#sample2.map(data3_Lon360$Latitude, data3_Lon360$Lon360, lat.range, lon.range, n = n, 
+#           bg = type.col[data3_Lon360$strata], pch = type.pch[data3_Lon360$strata])
+
+sample2.map(data3_Lon360$Latitude, data3_Lon360$Lon360, lat.range, lon.range, n = n, 
+           bg = "black", col = "blue")
+dev.off()
+```
+
+
+
+
+Format data to genind object for adegenet (see tutorials at https://github.com/thibautjombart/adegenet)
+```{r cache=TRUE}
+# first convert gtypes to genind
+genot <- data3[5:ncol(data3)]
+dim(genot)
+loc<-ncol(genot) # counts the number of columns (alleles)
+
+allele <- sapply(genot, levels)
+
+#List of Alleles 1
+Ai <- seq(1,loc-1,2); length(Ai)
+#List of Alleles 2
+Aj <- seq(2,loc,2); length(Aj)
+
+# Nb loci
+nloc <- length(Ai)
+
+# Empty matrix
+SNPdata <- matrix(ncol=length(genot)/2, nrow=nrow(genot))
+
+# Loop to assamble A1 and A2 of each loci into combined alleles in single column
+for (i in c(1:nloc)){
+  #i=1
+  SNP <- paste(genot[,Ai[i]], genot[,Aj[i]], sep="/")
+  SNPdata[,i] <- SNP
+}
+
+# Note SNPdata have lost the loc.names. We can restore that as follow
+my.colnames <- names(genot)[Ai]
+my.new.colnames <- gsub(".1$","", names(genot)[Ai], perl=TRUE)
+colnames(SNPdata) <- my.new.colnames #gsub(".1$","", names(genot)[Ai], perl=TRUE)
+rownames(SNPdata) <- data3$labid
+SNPdata1 <- cbind(labid = rownames(SNPdata), SNPdata)
+SNPdata[c(1:10), (1:10)]
+
+obj<-df2genind(X=SNPdata, ind.names=data3$labid, pop=data3$strata, ploidy=2, sep="/", NA.char = "NA")
+genind.summary <- summary(obj)
+###obj$other$xy <-cbind(data3$Longitude,data3$Latitude) #for data that cross the international date line, change Longitude to Lon360 (and provide converted data column)
+
+# pdf(file=paste0(title,"_",stratum,"_Sample_sizes.pdf"), width = 5, height = 5, paper = "letter", pointsize = 8)
+obj$other$xy <-cbind(data3_Lon360$Lon360, data3_Lon360$Latitude)
+is.genind(obj)
+obj
+barplot(table(pop(obj)), col=funky(17), las=3,
+ylab="Sample size", cex.names=0.4) # xlab="Population", 
+# dev.off()
+
+# create genpop object from genind:
+genpop <- genind2genpop(obj)
+
+```
+
+Generate distance matrices
+```{r include=FALSE}
+# pairwise population distances based on Fst (strataG)
+stats <- c("Fst")
+
+# Run just pairwise tests for specified metrics
+Dgen_fst <- pairwiseTest(g, stats, nrep = 100, write.output=FALSE) # default nrep =1000
+write.csv(Dgen_fst$result, file = paste(stratum, "_pairwise_results.csv", sep = ""))
+Dgen_Fst_matrix<-Dgen_fst$pair.mat$Fst
+write.csv(Dgen_Fst_matrix,paste0(title,"_",stratum,"_Fst_matrix.csv"))
+Dgen_Fst_matrix[is.na(Dgen_Fst_matrix)]<-0
+Dgen_Fst_matrix<-as.dist(Dgen_Fst_matrix) # convert to dist object
+
+```
+
+Map population average lat/lon
+```{r echo=FALSE, fig.height=8, fig.width=8}
+# add population average lat/lon to genind data file ("obj"). Assumes longitude is already converted to 360°. file has 3 columns; populations (no header), Latitude, Longitude_360.
+
+pop_xy<-read.csv("Ppho_pop_ave_latlon.csv", header = TRUE, row.names=1)
+obj1<-obj
+obj1$other$xy <- pop_xy
+
+# add a column for 360° mapping
+#Lon360 <- ifelse(data3$Longitude < 0, 360 + data3$Longitude, data3$Longitude)
+#data3_Lon360 <- cbind(data3, Lon360)
+lat_min <- min(pop_xy$Latitude)
+lat_max <- max(pop_xy$Latitude)
+lon_min <- min(pop_xy$Longitude_360)
+lon_max <- max(pop_xy$Longitude_360)
+    
+lat.range <- c(lat_min - 4, lat_max + 4)
+lon.range <- c(lon_min - 4, lon_max + 4)
+n<-5
+
+# NOT USED: could develop to select colors based on number of strata and apply to the map.
+#type.col <- "red" 
+#type.pch <- 21
+#create named vectors where the names match the values in the "type" column of 
+#the input data file, and each type is assigned a color and shape.
+#sample2.map(data3_Lon360$Latitude, data3_Lon360$Lon360, lat.range, lon.range, n = n, 
+#           bg = type.col[data3_Lon360$strata], pch = type.pch[data3_Lon360$strata])
+
+# pdf(file=paste0(title,"_",stratum,"_pop_map.pdf"), width = 5, height = 5, paper = "letter", pointsize = 8)
+sample2.map(pop_xy$Latitude, pop_xy$Longitude_360, lat.range, lon.range, n = n, 
+           bg = "black", col = "darkred")
+# dev.off()
+```
+
+IBD Mantel test by population
+```{r}
+
+genpop1 <- genind2genpop(obj1)
+
+Dgen_geo <- dist(genpop1)
+
+ibd_pop <- mantel.randtest(Dgen_Fst_matrix,Dgen_geo, nrepet = 100) #nrepet should be ≥10000
+a=paste0("observation = ",ibd_pop$obs)
+b=paste0("alternative hypothesis = ",ibd_pop$alter)
+c=paste0("based on ",ibd_pop$rep," replicates")
+d=paste0("simulated pvalue = ",ibd_pop$pvalue)
+
+# pdf(file=paste0(title,"_",stratum,"_pop_mantel.pdf"), width = 5, height = 5, paper = "letter", pointsize = 8)
+plot(ibd_pop)
+plot(NA, xlim=c(0,5), ylim=c(0,5), bty='n',
+     xaxt='n', yaxt='n', xlab='', ylab='')
+text(1,4,a, pos=4)
+text(1,3,b, pos=4)
+text(1,2,c, pos=4)
+text(1,1,d, pos=4)
+points(rep(1,4),1:4, pch=15)
+ibd_pop
+# dev.off()
+```
+
+
+IBD Mantel test, by individual
+```{r cache=TRUE}
+genpop<-genind2genpop(obj) #needed to calculate geographic distances
+Dgen <- dist(obj, method = "euclidean", diag = FALSE, upper = FALSE, p = 2) #method -> genetic distance method
+#  The analysis is applied on allele frequency within individuals as represented in the genind object. We can use the function dist() from adegenet which provides different options. We will use the euclidean distance among vector of allele frequencies.
+Dgeo <- dist(genpop$other$xy, method = "euclidean")
+ibd <- mantel.randtest(Dgen,Dgeo, nrepet = 100) #nrepet should be ≥10000
+a=paste0("observation = ",ibd$obs)
+b=paste0("alternative hypothesis = ",ibd$alter)
+c=paste0("based on ",ibd$rep," replicates")
+d=paste0("simulated pvalue = ",ibd$pvalue)
+
+# pdf(paste0(title,"_",stratum,"indiv_mantel.pdf"))
+# want to paste mantel results into pdf
+plot(NA, xlim=c(0,5), ylim=c(0,5), bty='n',
+     xaxt='n', yaxt='n', xlab='', ylab='')
+text(1,4,a, pos=4)
+text(1,3,b, pos=4)
+text(1,2,c, pos=4)
+text(1,1,d, pos=4)
+points(rep(1,4),1:4, pch=15)
+# plot ibd histgram and the genetic and geographic distance frequency historgrams
+plot(ibd)
+hist(Dgen)
+hist(Dgeo)
+# dev.off()
+```
+
+7.1.2 Cline or distant patches? (from Tutorial)
+```{r cache=TRUE}
+library(MASS)
+# for population distances
+# pdf(paste0(title,"_",stratum,"_IBD_scatterplot.pdf"))
+dens <- kde2d(Dgen_geo, Dgen_Fst_matrix,n=300)
+myPal <- colorRampPalette(c("white","blue","gold", "orange", "red"))
+plot(Dgen_geo, Dgen_Fst_matrix, pch=20,cex=.5)
+image(dens, col=transp(myPal(300),.7), add=TRUE)
+abline(lm(Dgen_Fst_matrix~Dgen_geo))
+title("Population isolation by distance (Fst) plot")
+
+
+# for individual distances
+dens <- kde2d(Dgeo,Dgen, n=300)
+myPal <- colorRampPalette(c("white","blue","gold", "orange", "red"))
+plot(Dgeo, Dgen, pch=20,cex=.5)
+image(dens, col=transp(myPal(300),.7), add=TRUE)
+abline(lm(Dgen~Dgeo))
+title("Individual isolation by distance (euclidean) plot")
+# dev.off()
+#single cloud of points is consistent with continuous cline; discontinuities indicates patches
+
+```
+
+7.2 Using Monmonier's algorithm to define genetic boundaries
+Monmonier's algorithm for population distance IBD 
+
+```{r cache=TRUE}
+summary(obj1$pop)
+
+#vector of polulations
+pops<-unique(obj1$pop)
+
+temp <- obj1$pop
+
+levels(temp) <- as.numeric(pops) #matches num of pops, used to assign diff. point shapes
+temp <- as.numeric(as.character(temp))
+
+# plot scatter-plot of samples stratified by population
+#  pdf(paste0(title,"_",stratum,"_samples_by_pop.pdf"), width = 5, height = 6)
+  plot(obj$other$xy,pch=temp,cex=0.5,xlab='x',ylab='y')
+legend("bottom", ncol=2,leg=pops ,pch=pops, cex = 0.5)
+#sample2.map(pop_xy$Longitude_360, pop_xy$Latitude, lat.range, lon.range, n = n, 
+#           bg = "black", col = "blue", pt.cex = 0.5)
+#  dev.off()
+
+# connectivity network from genetic distance matrix ("Dgen")
+# use jitter to change duplicate locations to non-duplicate locations
+#obj1$other$xy<-jitter(obj$other$xy, factor = 0.3)
+gab<-chooseCN(obj1$other$xy, ask = FALSE, type = 2) #type=type of graph (2=Gabriel)
+mon1 <- monmonier(obj1$other$xy,Dgen_Fst_matrix,gab, scanthres = FALSE)
+ thresh<-mon1$threshold
+mon1 <- monmonier(obj1$other$xy,Dgen_Fst_matrix,gab, threshold = thresh) #scanthres=TRUE
+
+pco1pop <- dudi.pco(Dgen_Fst_matrix, scannf = FALSE, nf=1) #dudi.pco computes PCA on Euclidian distance matrix
+
+#  pdf(paste0(title,"_",stratum,"pop_eigenvalues.pdf"), width = 5, height = 6)
+barplot(pco1pop$eig, main="Population Eigenvalues")
+#  dev.off()
+
+Dgen2pop<-dist(pco1pop$li)
+mon2pop <- monmonier(obj1$other$xy,Dgen2pop,gab, scanthres = FALSE)
+thresh2<-mon2pop$threshold
+mon2pop <- monmonier(obj1$other$xy,Dgen2pop,gab, threshold = thresh2)
+coords.monmonier(mon2pop)
+
+#  pdf(paste0(title,"_",stratum,"_pop_Monmonier_boundaries_thresh_",thresh2,".pdf"), width = 5, height = 6)
+
+adegenet::plot(mon2pop,add.arrows=TRUE,bwd=2,col="blue")  
+
+obj2<-obj1
+obj2$pop<-unique(obj2$pop)
+
+adegenet::plot(mon2pop,add.arrows=TRUE,bwd=2,col="black")
+points(obj2$other$xy, cex=1, pch=20)
+#col=fac2col(pop(obj2)), col.pal=deepseasun) # col=fac2col(pop(obj1)
+legend("bottomleft",ncol=2, leg=pops, pch=20
+#col=deepseasun(length(obj2$pop))
+, pt.cex=1, cex=0.5)
+
+adegenet::plot(mon2pop,add.arrows=FALSE,bwd=2,col="black")
+points(obj2$other$xy, cex=1, pch=20)
+#col=fac2col(pop(obj2)), col.pal=spectral) # col=fac2col(pop(obj1)
+legend("bottomleft",ncol=2, leg=pops, pch=20
+#col=spectral(length(pops))
+, pt.cex=1, cex=0.5)
+
+#  dev.off()
+```
+
+Monmonier's algorithm for individual distance IBD
+```{r cache=TRUE}
+summary(obj$pop)
+
+#vector of polulations (this repeats from section above, in case that section is skipped)
+pops<-unique(obj1$pop)
+
+temp <- obj1$pop
+
+levels(temp) <- as.numeric(pops) #matches num of pops, used to assign diff. point shapes
+temp <- as.numeric(as.character(temp))
+
+#temp <- obj$pop
+#levels(temp) <- pops #matches num of pops, used to assign diff. point shapes
+#temp <- as.numeric(as.character(temp))
+#sample2.map(data3_Lon360$Latitude, data3_Lon360$Lon360, lat.range, lon.range, n = n, 
+#           bg = "black", col = "blue", pt.cex = 0.5)
+
+#  pdf(paste0(title,"_",stratum,"_indiv_by_pop_map.pdf"), width = 5, height = 6)
+#plot(obj$other$xy,pch=temp,cex=0.5,xlab='x',ylab='y') #pch=temp
+#legend("bottom",ncol=2, leg=pops ,pch=pops, cex = 0.5)
+#  dev.off()
+
+# connectivity network from genetic distance matrix by sample ("Dgen")
+# use jitter to change duplicate locations to non-duplicate locations
+obj3<-obj
+obj3$other$xy<-jitter(obj$other$xy, factor = 5)
+gab<-chooseCN(obj3$other$xy, ask = FALSE, type = 2) #type=type of graph (2=Gabriel)
+mon1 <- monmonier(obj3$other$xy,Dgen,gab, scanthres = FALSE) # do this to determine threshold, then run next line with threshold
+thresh3<-mon1$threshold
+mon1 <- monmonier(obj3$other$xy,Dgen,gab, threshold = thresh3) #scanthres=TRUE
+
+pco1 <- dudi.pco(Dgen, scannf = FALSE, nf=1)
+
+#  pdf(paste0(title,"_",stratum,"_indiv_eigenvalues.pdf"), width = 5, height = 6)
+
+barplot(pco1$eig, main="Eigenvalues")
+Dgen2<-dist(pco1$li)
+mon2 <- monmonier(obj3$other$xy,Dgen2,gab, scanthres = FALSE) # do this to determine threshold, then run next line with threshold
+  thresh4<-mon2$threshold
+mon2 <- monmonier(obj3$other$xy,Dgen2,gab, threshold = thresh4)
+coords.monmonier(mon2)
+#  dev.off()
+
+  #set the color palett; change "seed"" to change color order
+cols<-fac2col(pop(obj3), col.pal=deepseasun, seed = 2.5) # 2.5 seems to mix them up well
+cols<-replace(cols, cols=="#DAB822","green") # I don't like some of the colors, so replace them
+cols<-replace(cols, cols=="#917A66","darkolivegreen")
+colsLeg<-unique(cols)
+
+  
+#  pdf(paste0(title,"_",stratum,"_indiv_Monmonier_boundaries_thresh","_",thresh4,"_custcol.pdf"), width = 5, height = 6)
+plot(mon2,add.arrows=FALSE,bwd=4,col="black")
+points(obj$other$xy, cex=0.8, pch=19,
+col=cols) #fac2col(pop(obj3), col.pal=deepseasun, seed = 3))
+legend("bottomleft",ncol=2, leg=pops, pch=c(19),
+col=colsLeg, pt.cex=0.8, cex=0.8)
+
+
+plot(mon2,add.arrows=TRUE,bwd=4,col="black")
+points(obj3$other$xy, cex=0.8, pch=19,
+col=cols)  #fac2col(pop(obj3), col.pal=deepseasun, seed = 5))
+legend("bottomleft",ncol=2, leg=pops, pch=c(19),
+col=colsLeg, pt.cex=0.8, cex=0.8) #deepseasun(length(pops))
+
+
+#  dev.off()
+```
+
+
+```{r}
+save.image(file=paste0(title, "_", stratum, "_IBD.Rdata"))
+```
+
