@@ -1,18 +1,19 @@
 ---
 title: "IBD"
 author: "Phil Morin"
-date: "11/29/2018"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
 output:
-  html_document: default
-  pdf_document: default
-  word_document: default
+  word_document:
+    toc: yes
+    toc_depth: 3
+#  number_sections: true
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Isolation by distance (IBD) analysis of population genetic data, based on functions in the package 'adegenet' and associated tutorial. 
+# Isolation by distance (IBD) analysis of population genetic data, based on functions in the package 'adegenet' and associated tutorial. 
 This R-markdown document contains R-scripts to select genotypes based on a stratification scheme and conduct various analyses to infer genetic isolation by distance. 
 
 Example data and stratification files are included. For the purposes of the tutorial, repetitions for re-sampling tests have been set to 100, but should be increased as indicated in the comments for data analysis. 
@@ -24,7 +25,7 @@ https://github.com/thibautjombart/adegenet/blob/master/tutorials/tutorial-basics
 https://github.com/thibautjombart/adegenet
 
 
-load packages
+# Load packages
 ```{r echo=TRUE, results='hide', message=FALSE, warning=FALSE} 
 rm(list = ls())
 
@@ -49,7 +50,8 @@ getwd()
 ```
 
 
-load and format data from csv files for genotypes and stratification schemes (for gtypes object used by strataG package), and remove monomorphic loci for specified strata.
+# Load and format data from csv files for genotypes and stratification schemes 
+(for gtypes object used by strataG package), and remove monomorphic loci for specified strata.
 ```{r}
     
 stratum <- "Wcoast4_outer" #corrected to reflect AK_STRATA_3 and Wcoast4_num (several samples removed compared to Num_AK3_WC4)
@@ -125,7 +127,7 @@ attach(data3)
 data3[1:10,1:10]
 ```
 
-#Map the data points
+# Map the data points
 ```{r echo=FALSE, fig.height=8, fig.width=8}
 library(swfscMisc)
 pdf(file=paste0(title,"_",stratum,"_sample_map.pdf"))
@@ -162,7 +164,7 @@ sample2.map<-function (lat, lon, lat.range, lon.range, main = NULL,
 #pop_number <- #list of numbers, 1 to the total number of populations in the strata
   # build a color list for the number of populations in this stratification scheme
 
-# add a column for 360° mapping
+# add a column for 360 degree mapping
 Lon360 <- ifelse(data3$Longitude < 0, 360 + data3$Longitude, data3$Longitude)
 data3_Lon360 <- cbind(data3, Lon360)
 lat_min <- min(data3_Lon360$Latitude)
@@ -190,7 +192,8 @@ dev.off()
 
 
 
-Format data to genind object for adegenet (see tutorials at https://github.com/thibautjombart/adegenet)
+# Format data to genind object for adegenet
+(see tutorials at https://github.com/thibautjombart/adegenet)
 ```{r cache=TRUE}
 # first convert gtypes to genind
 genot <- data3[5:ncol(data3)]
@@ -242,7 +245,7 @@ genpop <- genind2genpop(obj)
 
 ```
 
-Generate distance matrices
+# Generate distance matrices
 ```{r include=FALSE}
 # pairwise population distances based on Fst (strataG)
 stats <- c("Fst")
@@ -257,15 +260,15 @@ Dgen_Fst_matrix<-as.dist(Dgen_Fst_matrix) # convert to dist object
 
 ```
 
-Map population average lat/lon
+# Map population average lat/lon
 ```{r echo=FALSE, fig.height=8, fig.width=8}
-# add population average lat/lon to genind data file ("obj"). Assumes longitude is already converted to 360°. file has 3 columns; populations (no header), Latitude, Longitude_360.
+# add population average lat/lon to genind data file ("obj"). Assumes longitude is already converted to 360 degree. file has 3 columns; populations (no header), Latitude, Longitude_360.
 
 pop_xy<-read.csv("Ppho_pop_ave_latlon.csv", header = TRUE, row.names=1)
 obj1<-obj
 obj1$other$xy <- pop_xy
 
-# add a column for 360° mapping
+# add a column for 360 degree mapping
 #Lon360 <- ifelse(data3$Longitude < 0, 360 + data3$Longitude, data3$Longitude)
 #data3_Lon360 <- cbind(data3, Lon360)
 lat_min <- min(pop_xy$Latitude)
@@ -291,7 +294,7 @@ sample2.map(pop_xy$Latitude, pop_xy$Longitude_360, lat.range, lon.range, n = n,
 # dev.off()
 ```
 
-IBD Mantel test by population
+# IBD Mantel test by population
 ```{r}
 
 genpop1 <- genind2genpop(obj1)
@@ -318,7 +321,7 @@ ibd_pop
 ```
 
 
-IBD Mantel test, by individual
+# IBD Mantel test, by individual
 ```{r cache=TRUE}
 genpop<-genind2genpop(obj) #needed to calculate geographic distances
 Dgen <- dist(obj, method = "euclidean", diag = FALSE, upper = FALSE, p = 2) #method -> genetic distance method
@@ -346,7 +349,8 @@ hist(Dgeo)
 # dev.off()
 ```
 
-7.1.2 Cline or distant patches? (from Tutorial)
+# Cline or distant patches? 
+(section 7.1.2 from Tutorial)
 ```{r cache=TRUE}
 library(MASS)
 # for population distances
@@ -371,7 +375,7 @@ title("Individual isolation by distance (euclidean) plot")
 
 ```
 
-7.2 Using Monmonier's algorithm to define genetic boundaries
+# Using Monmonier's algorithm to define genetic boundaries
 Monmonier's algorithm for population distance IBD 
 
 ```{r cache=TRUE}
@@ -437,7 +441,7 @@ legend("bottomleft",ncol=2, leg=pops, pch=20
 #  dev.off()
 ```
 
-Monmonier's algorithm for individual distance IBD
+# Monmonier's algorithm for individual distance IBD
 ```{r cache=TRUE}
 summary(obj$pop)
 
@@ -493,20 +497,20 @@ plot(mon2,add.arrows=FALSE,bwd=4,col="black")
 points(obj$other$xy, cex=0.8, pch=19,
 col=cols) #fac2col(pop(obj3), col.pal=deepseasun, seed = 3))
 legend("bottomleft",ncol=2, leg=pops, pch=c(19),
-col=colsLeg, pt.cex=0.8, cex=0.8)
+col=colsLeg, pt.cex=0.8, cex=0.7)
 
 
 plot(mon2,add.arrows=TRUE,bwd=4,col="black")
 points(obj3$other$xy, cex=0.8, pch=19,
 col=cols)  #fac2col(pop(obj3), col.pal=deepseasun, seed = 5))
 legend("bottomleft",ncol=2, leg=pops, pch=c(19),
-col=colsLeg, pt.cex=0.8, cex=0.8) #deepseasun(length(pops))
+col=colsLeg, pt.cex=0.8, cex=0.7) #deepseasun(length(pops))
 
 
 #  dev.off()
 ```
 
-
+# Save the data!
 ```{r}
 save.image(file=paste0(title, "_", stratum, "_IBD.Rdata"))
 ```
